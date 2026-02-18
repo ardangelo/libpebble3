@@ -16,27 +16,24 @@ import kotlinx.coroutines.launch
  * Implements TransportConnector interface for UART+COBS communication.
  *
  * Lifecycle:
- * 1. connect() - Opens UART, creates sender/receiver, starts PPoG
+ * 1. connect() - Opens UART, starts receiver, launches PPoG
  * 2. PPoG handles reset handshake and protocol negotiation
  * 3. disconnect() - Closes PPoG and UART
  *
- * @param devicePath Path to UART device (e.g., "/dev/ttyS2")
+ * @param uartDevice UART device instance (shared with sender)
  * @param scope Coroutine scope for connection lifetime
  * @param ppog PPoG state machine instance
  * @param pPoGStream PPoG stream for inbound/outbound packets
  */
 class PebbleUart(
-    private val devicePath: String,
+    private val uartDevice: UartDevice,
     private val scope: ConnectionCoroutineScope,
     private val ppog: PPoG,
     private val pPoGStream: PPoGStream,
 ) : TransportConnector {
-    private val logger = Logger.withTag("PebbleUart/$devicePath")
+    private val logger = Logger.withTag("PebbleUart/${uartDevice}")
 
-    private val uart = UartDevice(devicePath)
     private var receiver: UartPPoGReceiver? = null
-    var sender: UartPPoGPacketSender? = null
-        private set
 
     private val _disconnected = CompletableDeferred<ConnectionFailureReason>()
     override val disconnected: Deferred<ConnectionFailureReason> = _disconnected
@@ -46,31 +43,28 @@ class PebbleUart(
      *
      * Steps:
      * 1. Open UART device and configure with stty
-     * 2. Create packet sender
-     * 3. Start packet receiver
-     * 4. Launch PPoG state machine (handles reset handshake)
+     * 2. Start packet receiver
+     * 3. Launch PPoG state machine (handles reset handshake)
+     *
+     * Note: Packet sender is already created and wired into PPoG via DI.
      *
      * @param lastError Previous connection error (unused for UART)
      * @return Connection result (Success or Failure)
      */
     override suspend fun connect(lastError: ConnectionFailureReason?): PebbleConnectionResult {
-        logger.d("connect() to $devicePath")
+        logger.d("connect()")
 
         return try {
             // 1. Open UART device
-            uart.open()
+            uartDevice.open()
             logger.d("UART opened successfully")
 
-            // 2. Create sender (will be used by PPoG)
-            sender = UartPPoGPacketSender(uart)
-            logger.d("Packet sender created")
-
-            // 3. Start receiver
-            receiver = UartPPoGReceiver(uart, pPoGStream, scope)
+            // 2. Start receiver
+            receiver = UartPPoGReceiver(uartDevice, pPoGStream, scope)
             receiver?.start()
             logger.d("Packet receiver started")
 
-            // 4. Start PPoG state machine
+            // 3. Start PPoG state machine
             // This will:
             // - Initiate or wait for ResetRequest
             // - Complete reset handshake
@@ -104,7 +98,7 @@ class PebbleUart(
         ppog.close()
 
         // Close UART device
-        uart.close()
+        uartDevice.close()
 
         // Complete disconnected deferred
         if (!_disconnected.isCompleted) {

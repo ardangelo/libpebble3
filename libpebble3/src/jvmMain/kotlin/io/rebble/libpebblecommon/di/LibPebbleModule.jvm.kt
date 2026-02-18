@@ -50,22 +50,28 @@ actual val platformModule: Module = module {
 
     // In ConnectionScope: provide UART-specific implementations
     scope<ConnectionScope> {
+        // Create UART device (shared between sender and transport)
+        scoped {
+            io.rebble.libpebblecommon.connection.uart.UartDevice(
+                devicePath = "/dev/ttyS2"  // TODO: make configurable
+            )
+        }
+
+        // Create UART packet sender (wraps the device)
+        scoped<PPoGPacketSender> {
+            io.rebble.libpebblecommon.connection.uart.UartPPoGPacketSender(
+                uart = get()  // Get the UartDevice
+            )
+        }
+
         // Use PebbleUart as the transport connector
         scoped<TransportConnector> {
-            val uart = PebbleUart(
-                devicePath = "/dev/ttyS2",  // TODO: make configurable
+            PebbleUart(
+                uartDevice = get(),  // Get the UartDevice
                 scope = get(),
                 ppog = get(),
                 pPoGStream = get()
             )
-            uart
-        }
-
-        // Use UartPPoGPacketSender as the packet sender
-        scoped<PPoGPacketSender> {
-            // Get the PebbleUart instance and return its sender
-            val uart = get<TransportConnector>() as PebbleUart
-            uart.sender ?: error("UART sender not initialized - call connect() first")
         }
     }
 }

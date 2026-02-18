@@ -482,6 +482,6 @@ tasks.register<Jar>("jvmFatJar") {
     duplicatesStrategy = DuplicatesStrategy.EXCLUDE
 
     manifest {
-        attributes["Main-Class"] = "io.rebble.libpebblecommon.test.UartTestMainKt"
+        attributes["Main-Class"] = "io.rebble.libpebblecommon.test.UartConnectionTestKt"
     }
 }
