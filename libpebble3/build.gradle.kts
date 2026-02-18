@@ -460,3 +460,28 @@ abstract class PlatformFatFramework : DefaultTask() {
         lipoMergeFrameworkDSYMs()
     }
 }
+
+// Create fat JAR for JVM with all dependencies
+tasks.register<Jar>("jvmFatJar") {
+    group = "build"
+    description = "Creates a fat JAR with all dependencies for JVM target"
+
+    archiveClassifier.set("fat")
+    archiveBaseName.set("libpebble3-jvm")
+
+    // Include compiled classes from JVM target
+    from(kotlin.jvm().compilations.getByName("main").output)
+
+    // Include all runtime dependencies
+    val runtimeClasspath = kotlin.jvm().compilations.getByName("main").runtimeDependencyFiles
+    from({
+        runtimeClasspath.map { if (it.isDirectory) it else zipTree(it) }
+    })
+
+    // Merge service files for ServiceLoader
+    duplicatesStrategy = DuplicatesStrategy.EXCLUDE
+
+    manifest {
+        attributes["Main-Class"] = "io.rebble.libpebblecommon.test.UartTestMainKt"
+    }
+}
