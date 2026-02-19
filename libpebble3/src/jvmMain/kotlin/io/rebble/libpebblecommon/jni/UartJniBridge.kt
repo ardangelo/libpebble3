@@ -209,9 +209,37 @@ class UartJniBridge {
      */
     fun sendMessage(endpoint: Int, data: ByteArray): Boolean {
         logger.d("sendMessage: endpoint=0x${endpoint.toString(16)}, size=${data.size}")
-        // TODO: Implement message sending via PebbleProtocolRunner
-        logger.w("sendMessage not yet implemented")
-        return false
+        try {
+            val protocolStreams = connectionScope?.get<PebbleProtocolStreams>()
+            if (protocolStreams == null) {
+                logger.w("No protocol streams available")
+                return false
+            }
+
+            // Build PP frame: [length:2 big-endian] [endpoint:2 big-endian] [payload]
+            val ppFrame = ByteArray(4 + data.size)
+            ppFrame[0] = (data.size shr 8).toByte()
+            ppFrame[1] = (data.size and 0xFF).toByte()
+            ppFrame[2] = (endpoint shr 8).toByte()
+            ppFrame[3] = (endpoint and 0xFF).toByte()
+            data.copyInto(ppFrame, 4)
+
+            // Launch async to avoid blocking the collector thread when called from
+            // within inboundMessagesFlow.collect (runBlocking on a Dispatchers.Default
+            // thread causes "Exception in thread 'Unknown thread'")
+            globalScope.launch {
+                try {
+                    protocolStreams.outboundPPBytes.send(ppFrame)
+                    logger.i(">>> Sent ${data.size} bytes to endpoint 0x${endpoint.toString(16)}")
+                } catch (e: Exception) {
+                    logger.e("sendMessage async failed: ${e.message}", e)
+                }
+            }
+            return true
+        } catch (e: Exception) {
+            logger.e("sendMessage failed: ${e.message}", e)
+            return false
+        }
     }
 
     /**
