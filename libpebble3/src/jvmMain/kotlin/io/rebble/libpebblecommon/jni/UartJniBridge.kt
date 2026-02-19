@@ -41,7 +41,6 @@ class UartJniBridge {
     private val globalScope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
     private var connectionScope: org.koin.core.scope.Scope? = null
     private var transportConnector: TransportConnector? = null
-    private var allowUnknownEndpoints: Boolean = false
 
     // Native callback methods (implemented in C++)
     private external fun nativeOnEndpointMessage(endpoint: Int, data: ByteArray)
@@ -144,15 +143,12 @@ class UartJniBridge {
                                     val payload = rawBytes.asByteArray().copyOfRange(4, rawBytes.size)
 
                                     if (msg.packet != null) {
-                                        // Known endpoint - always forward
+                                        // Known endpoint - forward to handler
                                         logger.i("<<< Received message on endpoint 0x${endpoint.toString(16)}, ${payload.size} bytes")
                                         handleEndpointMessage(endpoint, payload)
-                                    } else if (allowUnknownEndpoints) {
-                                        // Unknown endpoint - only forward if opted in
-                                        logger.i("<<< Received raw message on unknown endpoint 0x${endpoint.toString(16)}, ${payload.size} bytes")
-                                        handleEndpointMessage(endpoint, payload)
                                     } else {
-                                        logger.d("Dropping unknown endpoint 0x${endpoint.toString(16)}, ${payload.size} bytes")
+                                        // Unknown endpoint - drop with error log
+                                        logger.e("Dropping unknown endpoint 0x${endpoint.toString(16)}, ${payload.size} bytes")
                                     }
                                 } catch (e: Exception) {
                                     logger.w("Failed to process inbound message: ${e.message}", e)
@@ -240,17 +236,6 @@ class UartJniBridge {
             logger.e("sendMessage failed: ${e.message}", e)
             return false
         }
-    }
-
-    /**
-     * Enable or disable forwarding of messages on unknown/unregistered endpoints.
-     * By default, only known Pebble protocol endpoints are forwarded.
-     *
-     * @param allow true to forward unknown endpoint messages to the native callback
-     */
-    fun setAllowUnknownEndpoints(allow: Boolean) {
-        logger.i("Allow unknown endpoints: $allow")
-        allowUnknownEndpoints = allow
     }
 
     /**

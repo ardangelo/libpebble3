@@ -11,7 +11,7 @@ import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.io.IOException
 
 data class InboundPPMessage(
-    val packet: PebblePacket?,
+    val packet: PebblePacket,
     val rawBytes: UByteArray,
 ) {
     override fun equals(other: Any?): Boolean {
@@ -68,12 +68,14 @@ class PebbleProtocolRunner(
                     null
                 }
                 logger.d("inbound pebble protocol packet: $packet")
-                pebbleProtocolStreams.inboundMessagesFlow.emit(
-                    InboundPPMessage(
-                        packet,
-                        packetBytes
+                if (packet != null) {
+                    pebbleProtocolStreams.inboundMessagesFlow.emit(
+                        InboundPPMessage(
+                            packet,
+                            packetBytes
+                        )
                     )
-                )
+                }
             }
         } catch (e: IOException) {
             logger.e("error decoding PP", e)

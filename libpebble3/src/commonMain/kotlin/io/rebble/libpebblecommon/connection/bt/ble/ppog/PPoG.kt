@@ -107,20 +107,11 @@ class PPoG(
         val resetComplete = waitForPacket<PPoGPacket.ResetComplete>()
         logger.d("got $resetComplete")
 
-        // Send our own ResetComplete with our desired window sizes
-        sendPacketImmediately(
-            PPoGPacket.ResetComplete(
-                sequence = 0,
-                rxWindow = min(blePlatformConfig.desiredRxWindow, MAX_SUPPORTED_WINDOW_SIZE),
-                txWindow = min(blePlatformConfig.desiredTxWindow, MAX_SUPPORTED_WINDOW_SIZE),
-            ),
-            ppogVersion,
-        )
+        sendPacketImmediately(resetComplete, ppogVersion)
 
-        // Negotiate windows: use the minimum of what each side advertises
         return PPoGConnectionParams(
-            rxWindow = min(min(resetComplete.txWindow, blePlatformConfig.desiredTxWindow), MAX_SUPPORTED_WINDOW_SIZE),
-            txWindow = min(min(resetComplete.rxWindow, blePlatformConfig.desiredRxWindow), MAX_SUPPORTED_WINDOW_SIZE),
+            rxWindow = resetComplete.rxWindow,
+            txWindow = resetComplete.txWindow,
             pPoGversion = ppogVersion,
         )
     }

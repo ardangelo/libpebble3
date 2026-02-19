@@ -13,6 +13,7 @@ import io.rebble.libpebblecommon.packets.blobdb.timelinePacketsRegister
 import io.rebble.libpebblecommon.packets.dataLoggingPacketsRegister
 import io.rebble.libpebblecommon.packets.getBytesIncomingPacketsRegister
 import io.rebble.libpebblecommon.packets.healthSyncPacketsRegister
+import io.rebble.libpebblecommon.packets.k230PacketsRegister
 import io.rebble.libpebblecommon.packets.logDumpPacketsRegister
 import io.rebble.libpebblecommon.packets.musicPacketsRegister
 import io.rebble.libpebblecommon.packets.phoneControlPacketsRegister
@@ -53,6 +54,7 @@ object PacketRegistry {
         dataLoggingPacketsRegister()
         getBytesIncomingPacketsRegister()
         healthSyncPacketsRegister()
+        k230PacketsRegister()
     }
 
     /**

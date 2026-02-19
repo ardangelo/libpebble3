@@ -35,6 +35,7 @@ enum class ProtocolEndpoint(val value: UShort) {
     TIMELINE_ACTIONS(11440u),
     VOICE_CONTROL(11000u),
     HEALTH_SYNC(911u),
+    K230_MESSAGE(52480u /* 0xcd00 */),
     INVALID_ENDPOINT(0xffffu);
 
     companion object {
