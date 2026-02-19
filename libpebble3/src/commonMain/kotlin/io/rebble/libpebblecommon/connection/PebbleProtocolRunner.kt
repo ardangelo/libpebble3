@@ -1,7 +1,6 @@
 package io.rebble.libpebblecommon.connection
 
 import co.touchlab.kermit.Logger
-import com.oldguy.common.getUShortAt
 import io.ktor.utils.io.ByteChannel
 import io.ktor.utils.io.CancellationException
 import io.ktor.utils.io.peek
@@ -12,7 +11,7 @@ import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.io.IOException
 
 data class InboundPPMessage(
-    val packet: PebblePacket,
+    val packet: PebblePacket?,
     val rawBytes: UByteArray,
 ) {
     override fun equals(other: Any?): Boolean {
@@ -55,7 +54,7 @@ class PebbleProtocolRunner(
                 val sizeBytes = pebbleProtocolStreams.inboundPPBytes.peek(2)
                 val sizeArray = sizeBytes?.toByteArray()?.asUByteArray()
                     ?: throw IOException("couldn't read size")
-                val payloadSize = sizeArray.getUShortAt(0, littleEndian = false)
+                val payloadSize = ((sizeArray[0].toUInt() shl 8) or sizeArray[1].toUInt()).toUShort()
                 val packetSize = payloadSize + PP_HEADER_SIZE
                 val packetBytes =
                     pebbleProtocolStreams.inboundPPBytes.readByteArray(packetSize.toInt())
@@ -69,14 +68,12 @@ class PebbleProtocolRunner(
                     null
                 }
                 logger.d("inbound pebble protocol packet: $packet")
-                if (packet != null) {
-                    pebbleProtocolStreams.inboundMessagesFlow.emit(
-                        InboundPPMessage(
-                            packet,
-                            packetBytes
-                        )
+                pebbleProtocolStreams.inboundMessagesFlow.emit(
+                    InboundPPMessage(
+                        packet,
+                        packetBytes
                     )
-                }
+                )
             }
         } catch (e: IOException) {
             logger.e("error decoding PP", e)

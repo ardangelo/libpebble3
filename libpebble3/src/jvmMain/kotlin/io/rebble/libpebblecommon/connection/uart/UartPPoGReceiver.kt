@@ -38,7 +38,7 @@ class UartPPoGReceiver(
                     // Feed to COBS decoder
                     val frame = decoder.feed(byte)
 
-                    if (frame != null) {
+                    if (frame != null && frame.isNotEmpty()) {
                         // Complete frame decoded - send to PPoG for processing
                         pPoGStream.inboundPPoGBytesChannel.send(frame)
                     }
