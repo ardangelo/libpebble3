@@ -2,6 +2,9 @@ package io.rebble.libpebblecommon.connection.uart
 
 import io.rebble.libpebblecommon.connection.bt.ble.ppog.PPoGPacketSender
 import io.rebble.libpebblecommon.util.Cobs
+import kotlinx.coroutines.CompletableDeferred
+import kotlinx.coroutines.withTimeoutOrNull
+import java.util.concurrent.atomic.AtomicReference
 
 /**
  * PPoG packet sender for UART transport.
@@ -14,6 +17,8 @@ import io.rebble.libpebblecommon.util.Cobs
 class UartPPoGPacketSender(
     private val uart: UartDevice
 ) : PPoGPacketSender {
+
+    private val pendingFlush = AtomicReference<CompletableDeferred<Unit>?>(null)
 
     /**
      * Send a PPoG packet over UART.
@@ -34,11 +39,27 @@ class UartPPoGPacketSender(
 
             // Write to UART
             uart.write(frame)
+
+            // Signal any pending flush waiter
+            pendingFlush.getAndSet(null)?.complete(Unit)
+
             true
         } catch (e: Exception) {
             // Log error if logging is available
             false
         }
+    }
+
+    /**
+     * Wait until the next successful UART write, or timeout.
+     *
+     * @param timeoutMs Maximum time to wait in milliseconds
+     * @return true if a write completed, false on timeout
+     */
+    suspend fun awaitNextSend(timeoutMs: Long = 5000): Boolean {
+        val deferred = CompletableDeferred<Unit>()
+        pendingFlush.set(deferred)
+        return withTimeoutOrNull(timeoutMs) { deferred.await() } != null
     }
 
     /**

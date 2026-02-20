@@ -7,6 +7,7 @@ import io.rebble.libpebblecommon.connection.PebbleProtocolRunner
 import io.rebble.libpebblecommon.connection.PebbleProtocolStreams
 import io.rebble.libpebblecommon.connection.TransportConnector
 import io.rebble.libpebblecommon.connection.bt.ble.ppog.PPoG
+import io.rebble.libpebblecommon.connection.bt.ble.ppog.PPoGPacketSender
 import io.rebble.libpebblecommon.connection.bt.ble.ppog.PPoGStream
 import io.rebble.libpebblecommon.di.ConnectionCoroutineScope
 import io.rebble.libpebblecommon.di.ConnectionScope
@@ -235,6 +236,59 @@ class UartJniBridge {
         } catch (e: Exception) {
             logger.e("sendMessage failed: ${e.message}", e)
             return false
+        }
+    }
+
+    /**
+     * Send message to endpoint and block until it is written to UART.
+     *
+     * Uses runBlocking to synchronously put PP bytes in the channel, then waits
+     * for PPoG to pick them up and write to UART via UartPPoGPacketSender.
+     *
+     * Do NOT call this from within a callback (e.g. inboundMessagesFlow.collect) —
+     * use sendMessage instead.
+     *
+     * @param endpoint Endpoint number
+     * @param data Message data
+     * @return true if the message was written to UART, false on error or timeout
+     */
+    fun sendMessageBlocking(endpoint: Int, data: ByteArray): Boolean {
+        logger.d("sendMessageBlocking: endpoint=0x${endpoint.toString(16)}, size=${data.size}")
+        return try {
+            val protocolStreams = connectionScope?.get<PebbleProtocolStreams>()
+            if (protocolStreams == null) {
+                logger.w("No protocol streams available")
+                return false
+            }
+
+            val sender = connectionScope?.get<PPoGPacketSender>()
+            if (sender !is io.rebble.libpebblecommon.connection.uart.UartPPoGPacketSender) {
+                logger.w("No UartPPoGPacketSender available")
+                return false
+            }
+
+            // Build PP frame: [length:2 big-endian] [endpoint:2 big-endian] [payload]
+            val ppFrame = ByteArray(4 + data.size)
+            ppFrame[0] = (data.size shr 8).toByte()
+            ppFrame[1] = (data.size and 0xFF).toByte()
+            ppFrame[2] = (endpoint shr 8).toByte()
+            ppFrame[3] = (endpoint and 0xFF).toByte()
+            data.copyInto(ppFrame, 4)
+
+            runBlocking {
+                protocolStreams.outboundPPBytes.send(ppFrame)
+                logger.i(">>> Queued ${data.size} bytes to endpoint 0x${endpoint.toString(16)}, waiting for UART write...")
+                val flushed = sender.awaitNextSend(5000)
+                if (flushed) {
+                    logger.i(">>> Confirmed UART write for endpoint 0x${endpoint.toString(16)}")
+                } else {
+                    logger.w(">>> Timed out waiting for UART write")
+                }
+                flushed
+            }
+        } catch (e: Exception) {
+            logger.e("sendMessageBlocking failed: ${e.message}", e)
+            false
         }
     }
 
