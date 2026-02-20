@@ -16,6 +16,7 @@ data class BlePlatformConfig(
     val delayBleConnectionsAfterAppStart: Boolean = false,
     val delayBleDisconnections: Boolean = true,
     val fallbackToResetRequest: Boolean = false,
+    val initiateResetRequest: Boolean = false,
     val closeGattServerWhenBtDisabled: Boolean = true,
     val supportsBtClassic: Boolean = false,
 )

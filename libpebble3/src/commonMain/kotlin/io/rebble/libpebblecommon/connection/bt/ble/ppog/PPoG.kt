@@ -40,15 +40,21 @@ class PPoG(
 
     fun run() {
         scope.launch {
-            val params = withTimeoutOrNull(12.seconds) {
-                initWaitingForResetRequest()
-            } ?: withTimeoutOrNull(5.seconds) {
-                if (blePlatformConfig.fallbackToResetRequest) {
+            val params = if (blePlatformConfig.initiateResetRequest) {
+                withTimeoutOrNull(5.seconds) {
                     initWithResetRequest()
-                } else {
-                    null
-                }
-            } ?: throw ConnectionException(ConnectionFailureReason.TimeoutInitializingPpog)
+                } ?: throw ConnectionException(ConnectionFailureReason.TimeoutInitializingPpog)
+            } else {
+                withTimeoutOrNull(12.seconds) {
+                    initWaitingForResetRequest()
+                } ?: withTimeoutOrNull(5.seconds) {
+                    if (blePlatformConfig.fallbackToResetRequest) {
+                        initWithResetRequest()
+                    } else {
+                        null
+                    }
+                } ?: throw ConnectionException(ConnectionFailureReason.TimeoutInitializingPpog)
+            }
             runConnection(params)
         }
     }

@@ -32,6 +32,7 @@ actual val platformModule: Module = module {
             delayBleConnectionsAfterAppStart = false,
             delayBleDisconnections = false,
             fallbackToResetRequest = true,  // K230 initiates reset
+            initiateResetRequest = true,   // Skip waiting for FW to send ResetRequest
             closeGattServerWhenBtDisabled = false,
             supportsBtClassic = false,
         )
