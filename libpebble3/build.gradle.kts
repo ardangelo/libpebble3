@@ -1,3 +1,4 @@
+import java.net.URL
 import javax.xml.parsers.DocumentBuilderFactory
 import java.security.MessageDigest
 import java.util.zip.ZipFile
@@ -549,16 +550,56 @@ tasks.register("collectJvmDependencyLicenses") {
                     notices += """{"file":"$name","entry":"$coordinate@pom/licenses","sha256":"$hash"}"""
                 }
             }
+            if (coordinate == "net.java.dev.jna:jna:5.18.1") {
+                val archive = dependencySourcesDir.get().file("jna-5.18.1.tar.gz").asFile
+                val grant = tarTree(archive).matching {
+                    include("*/native/libffi/LICENSE")
+                }.singleFile.readBytes()
+                val name = "$prefix-native_libffi_LICENSE"
+                output.resolve(name).writeBytes(grant)
+                val hash = MessageDigest.getInstance("SHA-256").digest(grant)
+                    .joinToString("") { "%02x".format(it) }
+                notices += """{"file":"$name","entry":"native/libffi/LICENSE","sha256":"$hash"}"""
+            }
             """{"artifact":"${jsonEscape(coordinate)}","notices":[${notices.joinToString(",")}]}"""
         }
+        val cargoNotices = dependencySourcesDir.get().file("cargo-notice-records.json").asFile
+        val cargoRecords = groovy.json.JsonSlurper().parse(cargoNotices) as List<*>
+        val cargoDirectory = dependencySourcesDir.get().dir("cargo-notices").asFile
+        cargoRecords.forEach { entry ->
+            val record = entry as Map<*, *>
+            (record["notices"] as List<*>).forEach { notice ->
+                val noticeRecord = notice as Map<*, *>
+                val name = noticeRecord["file"] as String
+                check(name.matches(Regex("[A-Za-z0-9][A-Za-z0-9._+-]*"))) {
+                    "Unsafe Cargo notice filename: $name"
+                }
+                val bytes = cargoDirectory.resolve(name).readBytes()
+                val hash = MessageDigest.getInstance("SHA-256").digest(bytes)
+                    .joinToString("") { "%02x".format(it) }
+                check(hash == noticeRecord["sha256"]) { "Cargo notice hash mismatch: $name" }
+                output.resolve(name).writeBytes(bytes)
+            }
+        }
+        val mpl = cargoDirectory.resolve("MPL-2.0.txt").readBytes()
+        val mplHash = MessageDigest.getInstance("SHA-256").digest(mpl)
+            .joinToString("") { "%02x".format(it) }
+        output.resolve("MPL-2.0.txt").writeBytes(mpl)
         output.resolve("dependencies.json").writeText(
-            """{"schema_version":1,"artifacts":[${records.joinToString(",")}]}""" + "\n"
+            """{"schema_version":1,"license_texts":[{"file":"MPL-2.0.txt","sha256":"$mplHash"}],"artifacts":[""" +
+                (records + cargoRecords.map { groovy.json.JsonOutput.toJson(it) }).joinToString(",") +
+                "]}\n"
         )
     }
 }
+val nativeSourcesLock = rootProject.file("gradle/native-sources.json")
+
 tasks.register("collectJvmDependencySources") {
     val artifacts = jvmRuntimeArtifacts.map { it.resolvedConfiguration.resolvedArtifacts }
     inputs.files(jvmRuntimeArtifacts)
+    inputs.file(nativeSourcesLock)
+    inputs.file(rootProject.file("gradle/source-tree-sha256.py"))
+    inputs.file(rootProject.file("gradle/collect-cargo-sources.py"))
     outputs.dir(dependencySourcesDir)
 
     doLast {
@@ -589,11 +630,74 @@ tasks.register("collectJvmDependencySources") {
                 }
             """{"artifact":"$coordinate","sources":[${files.joinToString(",")}]}"""
         }
+        val lockBytes = nativeSourcesLock.readBytes()
+        val lock = groovy.json.JsonSlurper().parse(lockBytes.inputStream()) as Map<*, *>
+        check(lock["schema_version"] == 1) { "Unsupported native source lock" }
+        val nativeArchives = lock["archives"] as List<*>
+        val names = mutableSetOf<String>()
+        val observed = mutableListOf<Map<String, Any?>>()
+        nativeArchives.forEach { item ->
+            val archive = item as Map<*, *>
+            val name = archive["file"] as String
+            val url = archive["url"] as String
+            val expected = archive["sha256"] as? String
+            val expectedTree = archive["tree_sha256"] as? String
+            check(name.matches(Regex("[A-Za-z0-9][A-Za-z0-9._-]*")) && names.add(name)) {
+                "Unsafe or duplicate native source filename: $name"
+            }
+            check(url.startsWith("https://") &&
+                listOfNotNull(expected, expectedTree).size == 1 &&
+                (expected ?: expectedTree)!!.matches(Regex("[0-9a-f]{64}"))
+            ) { "Invalid native source URL or hash for $name" }
+            val dest = output.resolve(name)
+            val connection = URL(url).openConnection().apply {
+                connectTimeout = 30_000
+                readTimeout = 180_000
+            }
+            connection.getInputStream().use { input -> dest.outputStream().use { input.copyTo(it) } }
+            val actual = MessageDigest.getInstance("SHA-256").digest(dest.readBytes())
+                .joinToString("") { "%02x".format(it) }
+            if (expectedTree != null) {
+                val process = ProcessBuilder(
+                    "python3", rootProject.file("gradle/source-tree-sha256.py").absolutePath,
+                    dest.absolutePath
+                ).redirectErrorStream(true).start()
+                val tree = process.inputStream.bufferedReader().use { it.readText().trim() }
+                check(process.waitFor() == 0 && tree == expectedTree) {
+                    "Native source tree hash mismatch: $name ($tree)"
+                }
+            } else {
+                check(actual == expected) { "Native source archive hash mismatch: $name" }
+            }
+            observed += archive.entries.associate { (key, value) -> key.toString() to value } +
+                ("sha256" to actual)
+        }
+        output.resolve("native-sources.json").writeText(
+            groovy.json.JsonOutput.prettyPrint(
+                groovy.json.JsonOutput.toJson(mapOf("schema_version" to 1, "archives" to observed))
+            ) + "\n"
+        )
+        val cargoProcess = ProcessBuilder(
+            "python3", rootProject.file("gradle/collect-cargo-sources.py").absolutePath,
+            output.resolve("kable-0.42.0.tar.gz").absolutePath, output.absolutePath
+        ).redirectErrorStream(true).start()
+        val cargoOutput = cargoProcess.inputStream.bufferedReader().use { it.readText() }
+        check(cargoProcess.waitFor() == 0) { "Cargo source collection failed: $cargoOutput" }
+        val cargoRecords = groovy.json.JsonSlurper().parse(
+            output.resolve("cargo-source-records.json")
+        ) as List<*>
+        check(cargoRecords.isNotEmpty()) { "No locked Cargo sources collected" }
         output.resolve("sources.json").writeText(
-            """{"schema_version":1,"artifacts":[${records.joinToString(",")}]}""" + "\n"
+            """{"schema_version":1,"artifacts":[""" +
+                (records + cargoRecords.map { groovy.json.JsonOutput.toJson(it) }).joinToString(",") +
+                "]}\n"
         )
     }
 }
+tasks.named("collectJvmDependencyLicenses") {
+    dependsOn("collectJvmDependencySources")
+}
+
 
 tasks.register("verifyJvmDependencyLicenses") {
     dependsOn("collectJvmDependencyLicenses", "collectJvmDependencySources")
@@ -614,8 +718,12 @@ tasks.register("verifyJvmDependencyLicenses") {
         val withoutSource = (notices["artifacts"] as List<*>).map { it as Map<*, *> }
             .filter { withSources[it["artifact"]] != true }
             .map { it["artifact"] }
-        val sourceRecords = (sources["artifacts"] as List<*>).map { it as Map<*, *> }
-            .associateBy { it["artifact"] }
+        val nativeLock = groovy.json.JsonSlurper().parse(
+            dependencySourcesDir.get().file("native-sources.json").asFile
+        ) as Map<*, *>
+        check(nativeLock["schema_version"] == 1) { "Unsupported native source lock" }
+        val nativePins = (nativeLock["archives"] as List<*>).map { it as Map<*, *> }
+            .groupBy { it["artifact"] }
         val nativeWithoutSource = jvmRuntimeArtifacts.get().resolvedConfiguration.resolvedArtifacts
             .filter { it.id.componentIdentifier is ModuleComponentIdentifier }
             .mapNotNull { artifact ->
@@ -629,24 +737,19 @@ tasks.register("verifyJvmDependencyLicenses") {
                     }
                 }
                 if (!hasNativeBinary) return@mapNotNull null
-                val archives = sourceRecords[coordinate]?.get("sources") as? List<*> ?: emptyList<Any>()
-                val hasNativeSource = archives.any { entry ->
-                    val name = (entry as Map<*, *>)["file"] as String
-                    ZipFile(dependencySourcesDir.get().file(name).asFile).use { zip ->
-                        zip.entries().asSequence().any {
-                            it.name.lowercase().endsWith(".c") ||
-                                it.name.lowercase().endsWith(".cpp") ||
-                                it.name.lowercase().endsWith(".rs")
-                        }
-                    }
+                val pinned = nativePins[coordinate].orEmpty()
+                val complete = pinned.isNotEmpty() && pinned.all {
+                    val name = it["file"] as String
+                    val bytes = dependencySourcesDir.get().file(name).asFile.readBytes()
+                    MessageDigest.getInstance("SHA-256").digest(bytes)
+                        .joinToString("") { b -> "%02x".format(b) } == it["sha256"]
                 }
-                if (hasNativeSource) null else coordinate
+                if (complete) null else coordinate
             }
             .distinct()
             .sorted()
         check(nativeWithoutSource.isEmpty()) {
-            "Native binaries have no corresponding C/C++/Rust sources in the " +
-                "resolved source archives: $nativeWithoutSource"
+            "Native binaries lack pinned complete upstream source archives: $nativeWithoutSource"
         }
         check(withoutGrant.isEmpty() && withoutSource.isEmpty()) {
             "Unproven JVM redistribution grants: $withoutGrant; " +

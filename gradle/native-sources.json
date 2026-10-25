@@ -1,0 +1,40 @@
+{
+  "schema_version": 1,
+  "archives": [
+    {
+      "artifact": "androidx.sqlite:sqlite-bundled-jvm:2.6.2",
+      "file": "androidx-sqlite-2.6.2.tar.gz",
+      "revision": "fe30df161d480829efb21f37ff67a9f8cac9c620",
+      "url": "https://android.googlesource.com/platform/frameworks/support/+archive/fe30df161d480829efb21f37ff67a9f8cac9c620/sqlite.tar.gz",
+      "tree_sha256": "2564d476cef0131cf2f58cc2d139ee0ec5f8861ac626d924c14f23dbd60748bc"
+    },
+    {
+      "artifact": "androidx.sqlite:sqlite-bundled-jvm:2.6.2",
+      "file": "sqlite-amalgamation-3500100.zip",
+      "revision": "3.50.1",
+      "url": "https://www.sqlite.org/2025/sqlite-amalgamation-3500100.zip",
+      "sha256": "41716b44ac8777188c4c3f1f370f01c9cb9e3b6428eb5c981d086c35de2d9d3f"
+    },
+    {
+      "artifact": "com.juul.kable:kable-btleplug-ffi:0.42.0",
+      "file": "kable-0.42.0.tar.gz",
+      "revision": "64d39137298fe1884104aec9531f5df871d6b706",
+      "url": "https://codeload.github.com/JuulLabs/kable/tar.gz/64d39137298fe1884104aec9531f5df871d6b706",
+      "sha256": "4a9d7a0b24f003b9065d2f0bec5ad242fbc17ec2fa4212e415e08bbd30731abd"
+    },
+    {
+      "artifact": "net.java.dev.jna:jna:5.18.1",
+      "file": "jna-5.18.1.tar.gz",
+      "revision": "3c493c1642b1555d541755e0984c968ba6c0f540",
+      "url": "https://codeload.github.com/java-native-access/jna/tar.gz/3c493c1642b1555d541755e0984c968ba6c0f540",
+      "sha256": "24e56f01801f9b3fc84478449716379262049638936cd224c73e68898fc8f923"
+    },
+    {
+      "artifact": "org.fusesource.jansi:jansi:2.4.2",
+      "file": "jansi-2.4.2.tar.gz",
+      "revision": "3d2a9788fa48e4cecbbe28279d01111a125d2f66",
+      "url": "https://codeload.github.com/fusesource/jansi/tar.gz/3d2a9788fa48e4cecbbe28279d01111a125d2f66",
+      "sha256": "479044d7363de53ba272e6dd6b57092d4a42edcfbd302915a6dc4735ce725154"
+    }
+  ]
+}
