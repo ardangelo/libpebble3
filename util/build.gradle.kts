@@ -164,9 +164,22 @@ dependencies {
 }
 
 val headSha by lazy {
-    project.providers.exec {
-        commandLine("git", "describe", "--always", "--dirty")
-    }.standardOutput.asText.get().trim()
+    if (rootDir.resolve(".git").exists()) {
+        project.providers.exec {
+            commandLine("git", "describe", "--always", "--dirty")
+        }.standardOutput.asText.get().trim()
+    } else {
+        // The source exporter records the verified mobile gitlink before removing VCS state.
+        val revision = rootDir.resolve("source-revision.txt")
+        check(revision.isFile) {
+            "Git-free source requires source-revision.txt from the verified mobile gitlink"
+        }
+        revision.readText().trim().also {
+            check(it.matches(Regex("[0-9a-f]{40}"))) {
+                "source-revision.txt must contain the full mobile Git commit"
+            }
+        }
+    }
 }
 
 val properties = Properties().apply {

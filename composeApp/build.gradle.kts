@@ -25,6 +25,11 @@ val properties = Properties().apply {
 }
 val localReleaseBuild = properties["LOCAL_RELEASE_BUILD"]?.toString()?.toBooleanStrictOrNull() ?: false
 versioning.keepOriginalBundleFile = true
+// A Debian source archive has no Git metadata and builds only the JVM library.
+// Android application builds still derive versions from Git as before.
+val serviceJvmOnly = gradle.startParameter.taskNames.isNotEmpty() &&
+    gradle.startParameter.taskNames.all { it.removePrefix(":").startsWith("libpebble3:") }
+
 
 val headSha by lazy {
     project.providers.exec {
@@ -244,9 +249,11 @@ android {
         applicationId = "coredevices.coreapp"
         minSdk = libs.versions.android.minSdk.get().toInt()
         targetSdk = libs.versions.android.targetSdk.get().toInt()
-        // This uses the number of commits in the git history, so it will always increase on main
-        versionCode = versioning.getVersionCode()
-        versionName = try { versioning.getVersionName() } catch (e: Exception) { "unknown" }
+        if (rootProject.file(".git").exists() || !serviceJvmOnly) {
+            // App version codes count Git commits and increase on main.
+            versionCode = versioning.getVersionCode()
+            versionName = try { versioning.getVersionName() } catch (e: Exception) { "unknown" }
+        }
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
         ndk {
             //noinspection ChromeOsAbiSupport
