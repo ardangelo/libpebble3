@@ -13,6 +13,12 @@ plugins {
     alias(libs.plugins.kotlin.jvm) apply false
 }
 
+allprojects {
+    dependencyLocking {
+        lockAllConfigurations()
+    }
+}
+
 project.gradle.taskGraph.whenReady {
     allTasks.filter { it::class.simpleName?.contains("EmbedAndSign") == true }.forEach {
         logger.warn("Disabling embedding and signing task in project ${it.project.name}")

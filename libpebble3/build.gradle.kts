@@ -1,3 +1,10 @@
+import javax.xml.parsers.DocumentBuilderFactory
+import java.security.MessageDigest
+import java.util.zip.ZipFile
+import org.gradle.api.artifacts.component.ModuleComponentIdentifier
+import org.gradle.api.artifacts.result.ResolvedArtifactResult
+import org.gradle.jvm.JvmLibrary
+import org.gradle.language.base.artifact.SourcesArtifact
 import org.jetbrains.kotlin.gradle.plugin.KotlinSourceSetTree
 import org.jetbrains.kotlin.gradle.tasks.KotlinCompilationTask
 
@@ -461,6 +468,195 @@ abstract class PlatformFatFramework : DefaultTask() {
     }
 }
 
+// Keep provenance for every JVM runtime archive before fat-JAR duplicate handling
+// discards colliding META-INF/L* and NOTICE entries.
+val dependencyNoticesDir = layout.buildDirectory.dir("reports/dependency-licenses")
+val dependencySourcesDir = layout.buildDirectory.dir("reports/dependency-sources")
+val jvmRuntimeArtifacts = configurations.named("jvmRuntimeClasspath")
+tasks.register("collectJvmDependencyLicenses") {
+    val artifacts = jvmRuntimeArtifacts.map { it.resolvedConfiguration.resolvedArtifacts }
+    inputs.files(jvmRuntimeArtifacts)
+    outputs.dir(dependencyNoticesDir)
+
+    doLast {
+        val output = dependencyNoticesDir.get().asFile
+        output.deleteRecursively()
+        output.mkdirs()
+        val jsonEscape: (String) -> String = {
+            it.replace("\\", "\\\\").replace("\"", "\\\"")
+        }
+        val records = artifacts.get().sortedBy {
+            "${it.moduleVersion.id.group}:${it.name}:${it.moduleVersion.id.version}"
+        }.filter { it.id.componentIdentifier is ModuleComponentIdentifier }.map { artifact ->
+            val id = artifact.moduleVersion.id
+            val coordinate = "${id.group}:${id.name}:${id.version}"
+            val prefix = "${id.group}.${id.name}-${id.version}".replace(Regex("[^A-Za-z0-9._-]"), "_")
+            val notices = mutableListOf<String>()
+            ZipFile(artifact.file).use { zip ->
+                zip.entries().asSequence().filter { entry ->
+                    !entry.isDirectory &&
+                        entry.name.split('/').last().matches(
+                            Regex("(?i)(LICENSE|LICENCE|NOTICE|COPYING)([._-].*)?")
+                        ) &&
+                        (entry.name.startsWith("META-INF/") || !entry.name.contains('/'))
+                }.sortedBy { it.name }.forEach { entry ->
+                    val bytes = zip.getInputStream(entry).use { it.readBytes() }
+                    val digest = MessageDigest.getInstance("SHA-256").digest(bytes)
+                        .joinToString("") { "%02x".format(it) }
+                    val name = "$prefix-${entry.name.replace('/', '_')}"
+                    val target = output.resolve(name)
+                    check(!target.exists()) { "Duplicate dependency notice name: $name" }
+                    target.writeBytes(bytes)
+                    notices += """{"file":"${jsonEscape(name)}","entry":"${jsonEscape(entry.name)}","sha256":"$digest"}"""
+                }
+            }
+            if (notices.isEmpty()) {
+                // The JVM archives of many KMP publishers omit license files.
+                // Resolve their exact POM through Gradle so strict verification
+                // authenticates the declared grant instead of guessing by group.
+                val pom = configurations.detachedConfiguration(
+                    dependencies.create("$coordinate@pom")
+                ).singleFile
+                val parser = DocumentBuilderFactory.newInstance().apply {
+                    setFeature("http://apache.org/xml/features/disallow-doctype-decl", true)
+                    setFeature("http://xml.org/sax/features/external-general-entities", false)
+                    setFeature("http://xml.org/sax/features/external-parameter-entities", false)
+                    isXIncludeAware = false
+                    isExpandEntityReferences = false
+                }.newDocumentBuilder()
+                val licenses = parser.parse(pom).getElementsByTagName("license")
+                val grants = (0 until licenses.length).map { licenses.item(it) as org.w3c.dom.Element }
+                    .map {
+                        it.getElementsByTagName("name").item(0)?.textContent.orEmpty().trim() to
+                            it.getElementsByTagName("url").item(0)?.textContent.orEmpty().trim()
+                    }
+                if (grants.size == 1 &&
+                    grants.single().first.matches(Regex("(?i)(the )?apache( software)? license(, version 2\\.0)?|apache-2\\.0")) &&
+                    (grants.single().second.isEmpty() ||
+                        grants.single().second.matches(Regex("https?://www\\.apache\\.org/licenses/LICENSE-2\\.0(\\.txt)?")))
+                ) {
+                    val name = "$prefix-POM-LICENSE.txt"
+                    val text = "Artifact: $coordinate\nLicense: ${grants.single().first}\n" +
+                        "Publisher's license URL: ${grants.single().second}\n" +
+                        "Declared in: $coordinate@pom (SHA-256: " +
+                        MessageDigest.getInstance("SHA-256").digest(pom.readBytes())
+                            .joinToString("") { "%02x".format(it) } + ")\n" +
+                        "Full Apache-2.0 license text: " +
+                        "androidx.annotation.annotation-jvm-1.9.1-META-INF_androidx_annotation_annotation_LICENSE.txt\n"
+                    output.resolve(name).writeText(text)
+                    val hash = MessageDigest.getInstance("SHA-256").digest(text.toByteArray())
+                        .joinToString("") { "%02x".format(it) }
+                    notices += """{"file":"$name","entry":"$coordinate@pom/licenses","sha256":"$hash"}"""
+                }
+            }
+            """{"artifact":"${jsonEscape(coordinate)}","notices":[${notices.joinToString(",")}]}"""
+        }
+        output.resolve("dependencies.json").writeText(
+            """{"schema_version":1,"artifacts":[${records.joinToString(",")}]}""" + "\n"
+        )
+    }
+}
+tasks.register("collectJvmDependencySources") {
+    val artifacts = jvmRuntimeArtifacts.map { it.resolvedConfiguration.resolvedArtifacts }
+    inputs.files(jvmRuntimeArtifacts)
+    outputs.dir(dependencySourcesDir)
+
+    doLast {
+        val output = dependencySourcesDir.get().asFile
+        output.deleteRecursively()
+        output.mkdirs()
+        val modules = artifacts.get().mapNotNull {
+            it.id.componentIdentifier as? ModuleComponentIdentifier
+        }.distinct()
+        val results = dependencies.createArtifactResolutionQuery()
+            .forComponents(modules)
+            .withArtifacts(JvmLibrary::class.java, SourcesArtifact::class.java)
+            .execute()
+        val records = results.resolvedComponents.sortedBy { it.id.displayName }.map { component ->
+            val id = component.id as ModuleComponentIdentifier
+            val coordinate = "${id.group}:${id.module}:${id.version}"
+            val files = component.getArtifacts(SourcesArtifact::class.java)
+                .filterIsInstance<ResolvedArtifactResult>().sortedBy { it.file.name }
+                .map { source ->
+                    val name = "${id.group}.${id.module}-${id.version}-${source.file.name}"
+                        .replace(Regex("[^A-Za-z0-9._-]"), "_")
+                    val dest = output.resolve(name)
+                    check(!dest.exists()) { "Duplicate source archive: $name" }
+                    source.file.copyTo(dest)
+                    val hash = MessageDigest.getInstance("SHA-256").digest(dest.readBytes())
+                        .joinToString("") { "%02x".format(it) }
+                    """{"file":"$name","sha256":"$hash"}"""
+                }
+            """{"artifact":"$coordinate","sources":[${files.joinToString(",")}]}"""
+        }
+        output.resolve("sources.json").writeText(
+            """{"schema_version":1,"artifacts":[${records.joinToString(",")}]}""" + "\n"
+        )
+    }
+}
+
+tasks.register("verifyJvmDependencyLicenses") {
+    dependsOn("collectJvmDependencyLicenses", "collectJvmDependencySources")
+    doLast {
+        val notices = groovy.json.JsonSlurper().parse(
+            dependencyNoticesDir.get().file("dependencies.json").asFile
+        ) as Map<*, *>
+        val sources = groovy.json.JsonSlurper().parse(
+            dependencySourcesDir.get().file("sources.json").asFile
+        ) as Map<*, *>
+        val withSources = (sources["artifacts"] as List<*>).associate {
+            val item = it as Map<*, *>
+            item["artifact"] to (item["sources"] as List<*>).isNotEmpty()
+        }
+        val withoutGrant = (notices["artifacts"] as List<*>).map { it as Map<*, *> }
+            .filter { (it["notices"] as List<*>).isEmpty() }
+            .map { it["artifact"] }
+        val withoutSource = (notices["artifacts"] as List<*>).map { it as Map<*, *> }
+            .filter { withSources[it["artifact"]] != true }
+            .map { it["artifact"] }
+        val sourceRecords = (sources["artifacts"] as List<*>).map { it as Map<*, *> }
+            .associateBy { it["artifact"] }
+        val nativeWithoutSource = jvmRuntimeArtifacts.get().resolvedConfiguration.resolvedArtifacts
+            .filter { it.id.componentIdentifier is ModuleComponentIdentifier }
+            .mapNotNull { artifact ->
+                val id = artifact.moduleVersion.id
+                val coordinate = "${id.group}:${id.name}:${id.version}"
+                val hasNativeBinary = ZipFile(artifact.file).use { zip ->
+                    zip.entries().asSequence().any {
+                        it.name.lowercase().endsWith(".so") ||
+                            it.name.lowercase().endsWith(".dll") ||
+                            it.name.lowercase().endsWith(".dylib")
+                    }
+                }
+                if (!hasNativeBinary) return@mapNotNull null
+                val archives = sourceRecords[coordinate]?.get("sources") as? List<*> ?: emptyList<Any>()
+                val hasNativeSource = archives.any { entry ->
+                    val name = (entry as Map<*, *>)["file"] as String
+                    ZipFile(dependencySourcesDir.get().file(name).asFile).use { zip ->
+                        zip.entries().asSequence().any {
+                            it.name.lowercase().endsWith(".c") ||
+                                it.name.lowercase().endsWith(".cpp") ||
+                                it.name.lowercase().endsWith(".rs")
+                        }
+                    }
+                }
+                if (hasNativeSource) null else coordinate
+            }
+            .distinct()
+            .sorted()
+        check(nativeWithoutSource.isEmpty()) {
+            "Native binaries have no corresponding C/C++/Rust sources in the " +
+                "resolved source archives: $nativeWithoutSource"
+        }
+        check(withoutGrant.isEmpty() && withoutSource.isEmpty()) {
+            "Unproven JVM redistribution grants: $withoutGrant; " +
+                "missing corresponding source archives: $withoutSource"
+        }
+    }
+}
+
+
+
 // Create fat JAR for JVM with all dependencies
 tasks.register<Jar>("jvmFatJar") {
     group = "build"
@@ -483,5 +679,11 @@ tasks.register<Jar>("jvmFatJar") {
 
     manifest {
         attributes["Main-Class"] = "io.rebble.libpebblecommon.test.UartConnectionTestKt"
+    }
+}
+tasks.named<Jar>("jvmFatJar") {
+    dependsOn("collectJvmDependencyLicenses")
+    from(dependencyNoticesDir) {
+        into("META-INF/cyberdeck/dependency-licenses")
     }
 }
